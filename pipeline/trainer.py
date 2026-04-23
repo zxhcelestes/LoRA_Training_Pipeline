@@ -30,10 +30,10 @@ class LoRAConfig:
     gradient_accumulation_steps: int = 4
     max_grad_norm: float = 1.0
     # Mixed precision
-    mixed_precision: str = "fp16" # "no", "fp16", "bf16"
+    mixed_precision: str = "fp16"   # "no", "fp16", "bf16"
     # Memory saving
     gradient_checkpointing: bool = True
-    enable_xformers: bool = False # True if xformers installed
+    enable_xformers: bool = False    # True if xformers installed
     # Checkpointing
     checkpoint_every_n_steps: int = 200
     max_checkpoints_to_keep: int = 3
@@ -98,12 +98,12 @@ class CheckpointManager:
         self.ckpt_dir = output_dir / "checkpoints"
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    def save(self, pipeline, optimizer, step: int, metadata: dict) -> Path:
+    def save(self, unet, optimizer, step: int, metadata: dict) -> Path:
         ckpt_path = self.ckpt_dir / f"step_{step:06d}"
         ckpt_path.mkdir(exist_ok=True)
 
-        # Save LoRA weights
-        pipeline.unet.save_attn_procs(str(ckpt_path))
+        # Save LoRA weights via PEFT
+        unet.save_pretrained(str(ckpt_path))
 
         # Save optimizer state
         torch.save(optimizer.state_dict(), ckpt_path / "optimizer.pt")
@@ -194,8 +194,6 @@ class LoRATrainer:
     ) -> TrainingResult:
         """
         Main training entry point. Returns a TrainingResult.
-        On import failure (no diffusers/torch), runs a lightweight stub so
-        the rest of the system remains testable without a GPU environment.
         """
         try:
             return self._train_impl(job_id, train_records, val_records, resume_from)
@@ -238,8 +236,6 @@ class LoRATrainer:
         resume_from: Optional[str],
     ) -> TrainingResult:
         from diffusers import StableDiffusionPipeline, DDPMScheduler
-        from diffusers.loaders import AttnProcsLayers
-        from diffusers.models.attention_processor import LoRAAttnProcessor
         from transformers import CLIPTokenizer
         import torch.nn.functional as F
 
@@ -261,38 +257,33 @@ class LoRATrainer:
         noise_scheduler = DDPMScheduler.from_pretrained(cfg.base_model_id, subfolder="scheduler")
         tokenizer: CLIPTokenizer = pipe.tokenizer
 
-        # Freeze everything except LoRA
+        # Freeze everything
         pipe.vae.requires_grad_(False)
         pipe.text_encoder.requires_grad_(False)
         pipe.unet.requires_grad_(False)
 
-        # Inject LoRA attention processors
         unet = pipe.unet
         if cfg.gradient_checkpointing:
             unet.enable_gradient_checkpointing()
         if cfg.enable_xformers:
             unet.enable_xformers_memory_efficient_attention()
 
-        lora_attn_procs = {}
-        for name in unet.attn_processors.keys():
-            cross_attention_dim = (
-                None if name.endswith("attn1.processor")
-                else unet.config.cross_attention_dim
-            )
-            hidden_size = (
-                unet.config.attention_head_dim
-                if isinstance(unet.config.attention_head_dim, int)
-                else unet.config.attention_head_dim[0]
-            ) * 8  # approximate
-            lora_attn_procs[name] = LoRAAttnProcessor(
-                hidden_size=hidden_size,
-                cross_attention_dim=cross_attention_dim,
-                rank=cfg.lora_rank,
-            )
-        unet.set_attn_processor(lora_attn_procs)
+        # Inject LoRA via PEFT
+        from peft import LoraConfig, get_peft_model
+        lora_config = LoraConfig(
+            r=cfg.lora_rank,
+            lora_alpha=cfg.lora_alpha,
+            target_modules=list(cfg.target_modules),
+            lora_dropout=cfg.lora_dropout,
+            bias="none",
+        )
+        unet = get_peft_model(unet, lora_config)
+        unet.print_trainable_parameters()
 
-        lora_layers = AttnProcsLayers(unet.attn_processors)
-        optimizer = torch.optim.AdamW(lora_layers.parameters(), lr=cfg.learning_rate)
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, unet.parameters()),
+            lr=cfg.learning_rate,
+        )
 
         train_dataset = LoRADataset(train_records, tokenizer, cfg.target_size if hasattr(cfg, "target_size") else 512)
         train_loader = torch.utils.data.DataLoader(
@@ -345,7 +336,7 @@ class LoRATrainer:
                     scaler.scale(loss / cfg.gradient_accumulation_steps).backward()
                     if (batch_idx + 1) % cfg.gradient_accumulation_steps == 0:
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(lora_layers.parameters(), cfg.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(unet.parameters(), cfg.max_grad_norm)
                         scaler.step(optimizer)
                         scaler.update()
                         optimizer.zero_grad()
@@ -354,7 +345,7 @@ class LoRATrainer:
                     loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
                     (loss / cfg.gradient_accumulation_steps).backward()
                     if (batch_idx + 1) % cfg.gradient_accumulation_steps == 0:
-                        torch.nn.utils.clip_grad_norm_(lora_layers.parameters(), cfg.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(unet.parameters(), cfg.max_grad_norm)
                         optimizer.step()
                         optimizer.zero_grad()
 
@@ -376,11 +367,11 @@ class LoRATrainer:
                     accum_loss = 0.0
 
                 if global_step % cfg.checkpoint_every_n_steps == 0:
-                    ckpt_manager.save(pipe, optimizer, global_step, {"epoch": epoch})
+                    ckpt_manager.save(unet, optimizer, global_step, {"epoch": epoch})
                     GPUMemoryManager.clear_cache()
 
-        # Save final model
-        unet.save_attn_procs(str(output_dir))
+        # Save final LoRA weights via PEFT
+        unet.save_pretrained(str(output_dir))
         final_loss = steps_log[-1].loss if steps_log else float("nan")
         logger.info(f"Training complete. Final loss: {final_loss:.4f}. Model: {output_dir}")
 
