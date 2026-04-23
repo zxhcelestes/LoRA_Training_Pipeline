@@ -319,7 +319,7 @@ class LoRATrainer:
             accum_loss = 0.0
 
             for batch_idx, batch in enumerate(train_loader):
-                pixel_values = batch["pixel_values"].to(device)
+                pixel_values = batch["pixel_values"].to(device=device, dtype=pipe.vae.dtype)
                 input_ids = batch["input_ids"].to(device)
 
                 with torch.no_grad():
