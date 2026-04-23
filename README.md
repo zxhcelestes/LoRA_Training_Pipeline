@@ -286,7 +286,7 @@ curl -X POST http://localhost:8000/jobs \
   -F 'config={"trigger_word":"sks","num_epochs":1}'
 ```
  
-Observed job result (with 3 eval_images):
+Observed job result:
  
 ```json
 {
