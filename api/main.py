@@ -111,7 +111,7 @@ def _run_pipeline(
     upload_dir: str,
     request: TrainingRequest,
 ):
-    """Full pipeline: preprocess → train → evaluate. Runs in a thread pool."""
+    """Full pipeline: preprocess -> train -> evaluate. Runs in a thread pool."""
     output_root = Path("outputs") / job.job_id
 
     try:
