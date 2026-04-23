@@ -248,9 +248,10 @@ class LoRATrainer:
         GPUMemoryManager.clear_cache()
 
         logger.info(f"Loading base model: {cfg.base_model_id}")
+        use_fp16 = cfg.mixed_precision == "fp16" and torch.cuda.is_available()
         pipe = StableDiffusionPipeline.from_pretrained(
             cfg.base_model_id,
-            torch_dtype=torch.float16 if cfg.mixed_precision == "fp16" else torch.float32,
+            torch_dtype=torch.float16 if use_fp16 else torch.float32,
         )
         pipe.to(device)
 
@@ -307,7 +308,8 @@ class LoRATrainer:
         from torch.optim.lr_scheduler import CosineAnnealingLR
         scheduler = CosineAnnealingLR(optimizer, T_max=cfg.num_train_epochs * len(train_loader))
 
-        scaler = torch.cuda.amp.GradScaler() if cfg.mixed_precision == "fp16" else None
+        scaler = torch.amp.GradScaler("cuda") if use_fp16 else None
+
         steps_log: list[TrainingStep] = []
         global_step = start_step
         t0 = time.time()
@@ -329,7 +331,7 @@ class LoRATrainer:
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (latents.shape[0],), device=device).long()
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                if cfg.mixed_precision == "fp16" and scaler:
+                if use_fp16 and scaler:
                     with torch.cuda.amp.autocast():
                         noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
                         loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
