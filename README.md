@@ -286,25 +286,41 @@ curl -X POST http://localhost:8000/jobs \
   -F 'config={"trigger_word":"sks","num_epochs":1}'
 ```
  
-Observed job result:
+Observed job result (with 3 eval_images):
  
 ```json
 {
-  "job_id": "e6c8e154f09543ddba5bc2433c7ec16b",
-  "status": "training",
-  "progress": {
-    "stage": "training",
-    "stats": {
-      "total_input": 6,
-      "accepted": 6,
-      "augmented": 12,
-      "rejected": 0,
-      "train": 17,
-      "val": 0,
-      "test": 1
+    "job_id": "edd8eb3252354684b5f87f3f0fb93c00",
+    "status": "completed",
+    "result": {
+        "model_path": "outputs/edd8eb3252354684b5f87f3f0fb93c00/models/edd8eb3252354684b5f87f3f0fb93c00",
+        "summary": {
+            "total_steps": 17,
+            "duration_seconds": 25.56,
+            "config": {
+                "base_model_id": "runwayml/stable-diffusion-v1-5",
+                "lora_rank": 16,
+                "lora_alpha": 32,
+                "learning_rate": 0.0001,
+                "num_train_epochs": 1,
+                "train_batch_size": 1
+            }
+        },
+        "metrics": {
+            "clip_score": 0.277,
+            "fid_score": null,
+            "passes_threshold": true
+        },
+        "passes_quality_threshold": true,
+        "data_stats": {
+            "total_input": 6,
+            "accepted": 6,
+            "augmented": 12,
+            "rejected": 0,
+            "train": 17,
+            "val": 0,
+            "test": 1
+        }
     }
-  }
 }
 ```
- 
-All 6 uploaded images passed validation and deduplication. Augmentation expanded the dataset to 17 training samples. The pipeline transitioned automatically through each stage without any manual intervention.
