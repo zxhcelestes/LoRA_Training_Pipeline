@@ -286,8 +286,7 @@ curl -X POST http://localhost:8000/jobs \
   -F 'config={"trigger_word":"sks","num_epochs":1}'
 ```
  
-Observed job result:
- 
+Observed job result: 
 ```json
 {
     "job_id": "edd8eb3252354684b5f87f3f0fb93c00",
